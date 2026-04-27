@@ -1,0 +1,22 @@
+{
+  "name": "multi-gmail-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for managing multiple Gmail accounts in Claude Desktop",
+  "type": "module",
+  "bin": {
+    "gmail-mcp": "./src/server.js",
+    "gmail-mcp-cli": "./src/cli.js"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "cli": "node src/cli.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "googleapis": "^140.0.0",
+    "open": "^10.0.0"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}

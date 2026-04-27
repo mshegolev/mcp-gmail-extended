@@ -1,0 +1,4 @@
+node_modules/
+.gmail-mcp-oauth.json
+*.db
+.env

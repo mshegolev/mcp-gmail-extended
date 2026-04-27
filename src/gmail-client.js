@@ -1,0 +1,168 @@
+import { google } from 'googleapis';
+import { getAuthenticatedClient } from './auth.js';
+
+async function getGmail(email) {
+  const auth = await getAuthenticatedClient(email);
+  return google.gmail({ version: 'v1', auth });
+}
+
+function getHeader(headers, name) {
+  return headers?.find(h => h.name.toLowerCase() === name.toLowerCase())?.value ?? '';
+}
+
+function extractBody(payload) {
+  if (!payload) return '';
+
+  if (payload.parts) {
+    // Prefer plain text
+    for (const part of payload.parts) {
+      if (part.mimeType === 'text/plain' && part.body?.data) {
+        return Buffer.from(part.body.data, 'base64').toString('utf8');
+      }
+    }
+    // Recurse into multipart children, then fall back to HTML
+    for (const part of payload.parts) {
+      if (part.parts) {
+        const nested = extractBody(part);
+        if (nested) return nested;
+      }
+      if (part.mimeType === 'text/html' && part.body?.data) {
+        return Buffer.from(part.body.data, 'base64').toString('utf8');
+      }
+    }
+  }
+
+  if (payload.body?.data) {
+    return Buffer.from(payload.body.data, 'base64').toString('utf8');
+  }
+
+  return '';
+}
+
+function buildRaw({ from, to, cc, bcc, subject, body, inReplyTo, references }) {
+  const lines = [
+    `From: ${from}`,
+    `To: ${to}`,
+    cc ? `Cc: ${cc}` : null,
+    bcc ? `Bcc: ${bcc}` : null,
+    `Subject: ${subject}`,
+    'Content-Type: text/plain; charset=UTF-8',
+    inReplyTo ? `In-Reply-To: ${inReplyTo}` : null,
+    references ? `References: ${references}` : null,
+  ].filter(Boolean);
+
+  return Buffer.from(lines.join('\r\n') + '\r\n\r\n' + body).toString('base64url');
+}
+
+export async function searchEmails(email, query, maxResults = 10) {
+  const gmail = await getGmail(email);
+  const listRes = await gmail.users.messages.list({ userId: 'me', q: query, maxResults });
+
+  if (!listRes.data.messages?.length) return [];
+
+  const messages = await Promise.all(
+    listRes.data.messages.map(msg =>
+      gmail.users.messages.get({
+        userId: 'me',
+        id: msg.id,
+        format: 'metadata',
+        metadataHeaders: ['From', 'To', 'Subject', 'Date'],
+      })
+    )
+  );
+
+  return messages.map(({ data: msg }) => ({
+    id: msg.id,
+    threadId: msg.threadId,
+    from: getHeader(msg.payload?.headers, 'From'),
+    to: getHeader(msg.payload?.headers, 'To'),
+    subject: getHeader(msg.payload?.headers, 'Subject'),
+    date: getHeader(msg.payload?.headers, 'Date'),
+    snippet: msg.snippet,
+    labels: msg.labelIds ?? [],
+  }));
+}
+
+export async function getEmail(email, messageId) {
+  const gmail = await getGmail(email);
+  const { data: msg } = await gmail.users.messages.get({
+    userId: 'me',
+    id: messageId,
+    format: 'full',
+  });
+
+  return {
+    id: msg.id,
+    threadId: msg.threadId,
+    from: getHeader(msg.payload?.headers, 'From'),
+    to: getHeader(msg.payload?.headers, 'To'),
+    cc: getHeader(msg.payload?.headers, 'Cc'),
+    subject: getHeader(msg.payload?.headers, 'Subject'),
+    date: getHeader(msg.payload?.headers, 'Date'),
+    messageId: getHeader(msg.payload?.headers, 'Message-ID'),
+    references: getHeader(msg.payload?.headers, 'References'),
+    body: extractBody(msg.payload),
+    labels: msg.labelIds ?? [],
+  };
+}
+
+export async function sendEmail(email, { to, subject, body, cc, bcc }) {
+  const gmail = await getGmail(email);
+  const raw = buildRaw({ from: email, to, cc, bcc, subject, body });
+  const { data } = await gmail.users.messages.send({ userId: 'me', requestBody: { raw } });
+  return data;
+}
+
+export async function replyToEmail(email, messageId, body) {
+  const gmail = await getGmail(email);
+  const original = await getEmail(email, messageId);
+
+  const subject = original.subject.startsWith('Re: ')
+    ? original.subject
+    : `Re: ${original.subject}`;
+
+  const references = original.references
+    ? `${original.references} ${original.messageId}`
+    : original.messageId;
+
+  const raw = buildRaw({
+    from: email,
+    to: original.from,
+    subject,
+    body,
+    inReplyTo: original.messageId,
+    references,
+  });
+
+  const { data } = await gmail.users.messages.send({
+    userId: 'me',
+    requestBody: { raw, threadId: original.threadId },
+  });
+  return data;
+}
+
+export async function createDraft(email, { to, subject, body, cc, bcc }) {
+  const gmail = await getGmail(email);
+  const raw = buildRaw({ from: email, to, cc, bcc, subject, body });
+  const { data } = await gmail.users.drafts.create({
+    userId: 'me',
+    requestBody: { message: { raw } },
+  });
+  return data;
+}
+
+export async function listLabels(email) {
+  const gmail = await getGmail(email);
+  const { data } = await gmail.users.labels.list({ userId: 'me' });
+  return data.labels ?? [];
+}
+
+export async function modifyLabels(email, messageId, addLabelIds = [], removeLabelIds = []) {
+  const gmail = await getGmail(email);
+  const { data } = await gmail.users.messages.modify({
+    userId: 'me',
+    id: messageId,
+    requestBody: { addLabelIds, removeLabelIds },
+  });
+  return data;
+}

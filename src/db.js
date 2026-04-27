@@ -1,0 +1,50 @@
+import { DatabaseSync } from 'node:sqlite';
+import { homedir } from 'os';
+import { join } from 'path';
+
+const DB_PATH = join(homedir(), '.gmail-mcp-tokens.db');
+
+let db;
+
+function getDb() {
+  if (!db) {
+    db = new DatabaseSync(DB_PATH);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS accounts (
+        email         TEXT PRIMARY KEY,
+        access_token  TEXT,
+        refresh_token TEXT,
+        expiry        TEXT,
+        scopes        TEXT
+      )
+    `);
+  }
+  return db;
+}
+
+export function listAccounts() {
+  return getDb().prepare('SELECT email FROM accounts').all().map(r => r.email);
+}
+
+export function getTokens(email) {
+  return getDb().prepare('SELECT * FROM accounts WHERE email = ?').get(email) ?? null;
+}
+
+export function storeTokens(email, tokens) {
+  getDb()
+    .prepare(
+      `INSERT OR REPLACE INTO accounts (email, access_token, refresh_token, expiry, scopes)
+       VALUES (?, ?, ?, ?, ?)`
+    )
+    .run(
+      email,
+      tokens.access_token ?? null,
+      tokens.refresh_token ?? null,
+      tokens.expiry_date ? new Date(tokens.expiry_date).toISOString() : null,
+      tokens.scope ?? null
+    );
+}
+
+export function removeAccount(email) {
+  getDb().prepare('DELETE FROM accounts WHERE email = ?').run(email);
+}
