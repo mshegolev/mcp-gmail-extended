@@ -1,0 +1,36 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.gx-55/multi-gmail-mcp",
+  "description": "Manage multiple Gmail accounts in Claude Desktop — search, send, reply, draft, and organize.",
+  "repository": {
+    "url": "https://github.com/gx-55/multi-gmail-mcp",
+    "source": "github"
+  },
+  "version": "1.0.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "multi-gmail-mcp",
+      "version": "1.0.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "GOOGLE_CLIENT_ID",
+          "description": "Google OAuth2 client ID from your Google Cloud project (alternative to ~/.gmail-mcp-oauth.json)",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false
+        },
+        {
+          "name": "GOOGLE_CLIENT_SECRET",
+          "description": "Google OAuth2 client secret from your Google Cloud project (alternative to ~/.gmail-mcp-oauth.json)",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}
