@@ -15,34 +15,61 @@ function getDb() {
         access_token  TEXT,
         refresh_token TEXT,
         expiry        TEXT,
-        scopes        TEXT
+        scopes        TEXT,
+        label         TEXT
       )
     `);
+    // Migrate existing DBs that don't have the label column yet
+    try {
+      db.exec('ALTER TABLE accounts ADD COLUMN label TEXT');
+    } catch {
+      // Column already exists — safe to ignore
+    }
   }
   return db;
 }
 
 export function listAccounts() {
-  return getDb().prepare('SELECT email FROM accounts').all().map(r => r.email);
+  return getDb().prepare('SELECT email, label FROM accounts').all();
 }
 
 export function getTokens(email) {
   return getDb().prepare('SELECT * FROM accounts WHERE email = ?').get(email) ?? null;
 }
 
-export function storeTokens(email, tokens) {
+export function storeTokens(email, tokens, label = null) {
+  const existing = getTokens(email);
   getDb()
     .prepare(
-      `INSERT OR REPLACE INTO accounts (email, access_token, refresh_token, expiry, scopes)
-       VALUES (?, ?, ?, ?, ?)`
+      `INSERT OR REPLACE INTO accounts (email, access_token, refresh_token, expiry, scopes, label)
+       VALUES (?, ?, ?, ?, ?, ?)`
     )
     .run(
       email,
       tokens.access_token ?? null,
       tokens.refresh_token ?? null,
       tokens.expiry_date ? new Date(tokens.expiry_date).toISOString() : null,
-      tokens.scope ?? null
+      tokens.scope ?? null,
+      label ?? existing?.label ?? null
     );
+}
+
+export function setLabel(email, label) {
+  getDb().prepare('UPDATE accounts SET label = ? WHERE email = ?').run(label, email);
+}
+
+// Resolve a label or email string to a stored email address.
+// Returns the email if found, null otherwise.
+export function resolveEmail(labelOrEmail) {
+  const db = getDb();
+  // Exact email match first
+  const byEmail = db.prepare('SELECT email FROM accounts WHERE email = ?').get(labelOrEmail);
+  if (byEmail) return byEmail.email;
+  // Case-insensitive label match
+  const byLabel = db
+    .prepare('SELECT email FROM accounts WHERE lower(label) = lower(?)')
+    .get(labelOrEmail);
+  return byLabel?.email ?? null;
 }
 
 export function removeAccount(email) {

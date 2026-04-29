@@ -6,7 +6,7 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 
-import { listAccounts, storeTokens, removeAccount } from './db.js';
+import { listAccounts, storeTokens, removeAccount, setLabel, resolveEmail } from './db.js';
 import { initiateAuth } from './auth.js';
 import {
   searchEmails,
@@ -18,18 +18,65 @@ import {
   modifyLabels,
 } from './gmail-client.js';
 
-// { email -> { authUrl, tokenPromise } }
 const pendingSessions = new Map();
 
+// Session-level active account (label or email)
+let activeAccount = null;
+
+/**
+ * Resolve a label, email, or fallback to the active account.
+ * Throws a descriptive error if nothing resolves.
+ */
+function resolveAccount(labelOrEmail) {
+  const target = labelOrEmail || activeAccount;
+  if (!target) {
+    throw new Error(
+      'No account specified and no active account set. ' +
+        'Pass an email/label or call set_active_account first.'
+    );
+  }
+  const email = resolveEmail(target);
+  if (!email) {
+    throw new Error(
+      `No account found for "${target}". ` +
+        'Use list_accounts to see available accounts and their labels.'
+    );
+  }
+  return email;
+}
+
 const server = new Server(
-  { name: 'multi-gmail-mcp', version: '1.0.0' },
+  { name: 'multi-gmail-mcp', version: '1.0.1' },
   { capabilities: { tools: {} } }
 );
 
 const TOOLS = [
   {
     name: 'list_accounts',
-    description: 'List all authenticated Gmail accounts.',
+    description:
+      'List all authenticated Gmail accounts with their labels. ' +
+      'Always call this first so you know which label maps to which address.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'set_active_account',
+    description:
+      'Set a default Gmail account for this conversation. ' +
+      'After this, all tools can omit the email/label parameter and will use this account.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        account: {
+          type: 'string',
+          description: 'Email address or label (e.g. "work", "personal")',
+        },
+      },
+      required: ['account'],
+    },
+  },
+  {
+    name: 'get_active_account',
+    description: 'Show the currently active Gmail account for this conversation.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
@@ -42,6 +89,10 @@ const TOOLS = [
       type: 'object',
       properties: {
         email: { type: 'string', description: 'Gmail address to authenticate' },
+        label: {
+          type: 'string',
+          description: 'Optional label for this account (e.g. "work", "personal")',
+        },
       },
       required: ['email'],
     },
@@ -60,14 +111,26 @@ const TOOLS = [
     },
   },
   {
+    name: 'set_account_label',
+    description: 'Set or update the label for an existing Gmail account.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        account: { type: 'string', description: 'Email address or current label' },
+        label: { type: 'string', description: 'New label to assign (e.g. "work", "personal")' },
+      },
+      required: ['account', 'label'],
+    },
+  },
+  {
     name: 'remove_account',
     description: 'Remove a Gmail account and its stored credentials.',
     inputSchema: {
       type: 'object',
       properties: {
-        email: { type: 'string', description: 'Gmail address to remove' },
+        account: { type: 'string', description: 'Email address or label to remove' },
       },
-      required: ['email'],
+      required: ['account'],
     },
   },
   {
@@ -76,14 +139,14 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        email: { type: 'string', description: 'Gmail account to search in' },
-        query: { type: 'string', description: 'Gmail search query' },
-        max_results: {
-          type: 'number',
-          description: 'Maximum number of results (default: 10)',
+        account: {
+          type: 'string',
+          description: 'Email address or label (e.g. "work"). Uses active account if omitted.',
         },
+        query: { type: 'string', description: 'Gmail search query' },
+        max_results: { type: 'number', description: 'Maximum number of results (default: 10)' },
       },
-      required: ['email', 'query'],
+      required: ['query'],
     },
   },
   {
@@ -92,10 +155,13 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        email: { type: 'string', description: 'Gmail account' },
+        account: {
+          type: 'string',
+          description: 'Email address or label. Uses active account if omitted.',
+        },
         message_id: { type: 'string', description: 'Email message ID' },
       },
-      required: ['email', 'message_id'],
+      required: ['message_id'],
     },
   },
   {
@@ -104,14 +170,17 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        email: { type: 'string', description: 'Gmail account to send from' },
+        account: {
+          type: 'string',
+          description: 'Email address or label to send from. Uses active account if omitted.',
+        },
         to: { type: 'string', description: 'Recipient address(es)' },
         subject: { type: 'string', description: 'Subject line' },
         body: { type: 'string', description: 'Plain-text body' },
         cc: { type: 'string', description: 'CC recipients (optional)' },
         bcc: { type: 'string', description: 'BCC recipients (optional)' },
       },
-      required: ['email', 'to', 'subject', 'body'],
+      required: ['to', 'subject', 'body'],
     },
   },
   {
@@ -120,11 +189,14 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        email: { type: 'string', description: 'Gmail account to reply from' },
+        account: {
+          type: 'string',
+          description: 'Email address or label to reply from. Uses active account if omitted.',
+        },
         message_id: { type: 'string', description: 'ID of the email to reply to' },
         body: { type: 'string', description: 'Plain-text reply body' },
       },
-      required: ['email', 'message_id', 'body'],
+      required: ['message_id', 'body'],
     },
   },
   {
@@ -133,14 +205,17 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        email: { type: 'string', description: 'Gmail account' },
+        account: {
+          type: 'string',
+          description: 'Email address or label. Uses active account if omitted.',
+        },
         to: { type: 'string', description: 'Recipient address(es)' },
         subject: { type: 'string', description: 'Subject line' },
         body: { type: 'string', description: 'Plain-text body' },
         cc: { type: 'string', description: 'CC recipients (optional)' },
         bcc: { type: 'string', description: 'BCC recipients (optional)' },
       },
-      required: ['email', 'to', 'subject', 'body'],
+      required: ['to', 'subject', 'body'],
     },
   },
   {
@@ -149,9 +224,11 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        email: { type: 'string', description: 'Gmail account' },
+        account: {
+          type: 'string',
+          description: 'Email address or label. Uses active account if omitted.',
+        },
       },
-      required: ['email'],
     },
   },
   {
@@ -160,15 +237,14 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        email: { type: 'string', description: 'Gmail account' },
-        message_id: { type: 'string', description: 'Email message ID' },
-        label_ids: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Label IDs to add',
+        account: {
+          type: 'string',
+          description: 'Email address or label. Uses active account if omitted.',
         },
+        message_id: { type: 'string', description: 'Email message ID' },
+        label_ids: { type: 'array', items: { type: 'string' }, description: 'Label IDs to add' },
       },
-      required: ['email', 'message_id', 'label_ids'],
+      required: ['message_id', 'label_ids'],
     },
   },
   {
@@ -177,7 +253,10 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        email: { type: 'string', description: 'Gmail account' },
+        account: {
+          type: 'string',
+          description: 'Email address or label. Uses active account if omitted.',
+        },
         message_id: { type: 'string', description: 'Email message ID' },
         label_ids: {
           type: 'array',
@@ -185,7 +264,7 @@ const TOOLS = [
           description: 'Label IDs to remove',
         },
       },
-      required: ['email', 'message_id', 'label_ids'],
+      required: ['message_id', 'label_ids'],
     },
   },
   {
@@ -194,10 +273,13 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        email: { type: 'string', description: 'Gmail account' },
+        account: {
+          type: 'string',
+          description: 'Email address or label. Uses active account if omitted.',
+        },
         message_id: { type: 'string', description: 'Email message ID' },
       },
-      required: ['email', 'message_id'],
+      required: ['message_id'],
     },
   },
   {
@@ -206,10 +288,13 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        email: { type: 'string', description: 'Gmail account' },
+        account: {
+          type: 'string',
+          description: 'Email address or label. Uses active account if omitted.',
+        },
         message_id: { type: 'string', description: 'Email message ID' },
       },
-      required: ['email', 'message_id'],
+      required: ['message_id'],
     },
   },
   {
@@ -218,10 +303,13 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        email: { type: 'string', description: 'Gmail account' },
+        account: {
+          type: 'string',
+          description: 'Email address or label. Uses active account if omitted.',
+        },
         message_id: { type: 'string', description: 'Email message ID' },
       },
-      required: ['email', 'message_id'],
+      required: ['message_id'],
     },
   },
 ];
@@ -237,24 +325,52 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     switch (name) {
       case 'list_accounts': {
         const accounts = listAccounts();
-        text = accounts.length
-          ? `Authenticated Gmail accounts:\n${accounts.map(a => `  • ${a}`).join('\n')}`
-          : 'No Gmail accounts authenticated yet. Use initiate_auth to add one.';
+        if (!accounts.length) {
+          text = 'No Gmail accounts authenticated yet. Use initiate_auth to add one.';
+          break;
+        }
+        const active = activeAccount ? `\nActive account: ${activeAccount}` : '';
+        text =
+          'Authenticated Gmail accounts:\n' +
+          accounts
+            .map(({ email, label }) => {
+              const tag = label ? ` [label: ${label}]` : '';
+              return `  • ${email}${tag}`;
+            })
+            .join('\n') +
+          active;
+        break;
+      }
+
+      case 'set_active_account': {
+        const email = resolveAccount(args.account);
+        activeAccount = args.account;
+        text = `Active account set to: ${email}${args.account !== email ? ` (label: "${args.account}")` : ''}`;
+        break;
+      }
+
+      case 'get_active_account': {
+        if (!activeAccount) {
+          text = 'No active account set. Use set_active_account to set one.';
+        } else {
+          const email = resolveEmail(activeAccount);
+          text = `Active account: ${email}${activeAccount !== email ? ` (label: "${activeAccount}")` : ''}`;
+        }
         break;
       }
 
       case 'initiate_auth': {
-        const { email } = args;
+        const { email, label } = args;
         if (pendingSessions.has(email)) {
           const existing = pendingSessions.get(email);
           text =
             `Authentication already in progress for ${email}.\n\n` +
-            `Please open this URL if you haven't already:\n${existing.authUrl}\n\n` +
+            `Open this URL if you haven't already:\n${existing.authUrl}\n\n` +
             `Then call complete_auth with email: ${email}`;
           break;
         }
         const session = await initiateAuth();
-        pendingSessions.set(email, session);
+        pendingSessions.set(email, { ...session, label });
         text =
           `Authentication started for ${email}.\n\n` +
           `Please open this URL in your browser:\n${session.authUrl}\n\n` +
@@ -270,22 +386,33 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           break;
         }
         const tokens = await session.tokenPromise;
-        storeTokens(email, tokens);
+        storeTokens(email, tokens, session.label ?? null);
         pendingSessions.delete(email);
-        text = `Successfully authenticated ${email}!`;
+        text = `Successfully authenticated ${email}!` +
+          (session.label ? ` Label: "${session.label}"` : '');
+        break;
+      }
+
+      case 'set_account_label': {
+        const email = resolveAccount(args.account);
+        setLabel(email, args.label);
+        text = `Label "${args.label}" set for ${email}`;
         break;
       }
 
       case 'remove_account': {
-        removeAccount(args.email);
-        text = `Removed account: ${args.email}`;
+        const email = resolveAccount(args.account);
+        removeAccount(email);
+        if (activeAccount === args.account || activeAccount === email) activeAccount = null;
+        text = `Removed account: ${email}`;
         break;
       }
 
       case 'search_emails': {
-        const results = await searchEmails(args.email, args.query, args.max_results);
+        const email = resolveAccount(args.account);
+        const results = await searchEmails(email, args.query, args.max_results);
         if (!results.length) {
-          text = 'No emails found matching your query.';
+          text = `No emails found in ${email} matching your query.`;
           break;
         }
         text = results
@@ -304,7 +431,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'get_email': {
-        const msg = await getEmail(args.email, args.message_id);
+        const email = resolveAccount(args.account);
+        const msg = await getEmail(email, args.message_id);
         text = [
           `From: ${msg.from}`,
           `To: ${msg.to}`,
@@ -321,67 +449,76 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'send_email': {
-        const sent = await sendEmail(args.email, {
+        const email = resolveAccount(args.account);
+        const sent = await sendEmail(email, {
           to: args.to,
           subject: args.subject,
           body: args.body,
           cc: args.cc,
           bcc: args.bcc,
         });
-        text = `Email sent. Message ID: ${sent.id}`;
+        text = `Email sent from ${email}. Message ID: ${sent.id}`;
         break;
       }
 
       case 'reply_to_email': {
-        const replied = await replyToEmail(args.email, args.message_id, args.body);
-        text = `Reply sent. Message ID: ${replied.id}`;
+        const email = resolveAccount(args.account);
+        const replied = await replyToEmail(email, args.message_id, args.body);
+        text = `Reply sent from ${email}. Message ID: ${replied.id}`;
         break;
       }
 
       case 'create_draft': {
-        const draft = await createDraft(args.email, {
+        const email = resolveAccount(args.account);
+        const draft = await createDraft(email, {
           to: args.to,
           subject: args.subject,
           body: args.body,
           cc: args.cc,
           bcc: args.bcc,
         });
-        text = `Draft created. Draft ID: ${draft.id}`;
+        text = `Draft created in ${email}. Draft ID: ${draft.id}`;
         break;
       }
 
       case 'list_labels': {
-        const labels = await listLabels(args.email);
+        const email = resolveAccount(args.account);
+        const labels = await listLabels(email);
         text = labels.map(l => `${l.name}  (ID: ${l.id})`).join('\n');
         break;
       }
 
       case 'add_label': {
-        await modifyLabels(args.email, args.message_id, args.label_ids, []);
+        const email = resolveAccount(args.account);
+        await modifyLabels(email, args.message_id, args.label_ids, []);
         text = `Labels added to message ${args.message_id}.`;
         break;
       }
 
       case 'remove_label': {
-        await modifyLabels(args.email, args.message_id, [], args.label_ids);
+        const email = resolveAccount(args.account);
+        await modifyLabels(email, args.message_id, [], args.label_ids);
         text = `Labels removed from message ${args.message_id}.`;
         break;
       }
 
       case 'archive_email': {
-        await modifyLabels(args.email, args.message_id, [], ['INBOX']);
-        text = `Message ${args.message_id} archived.`;
+        const email = resolveAccount(args.account);
+        await modifyLabels(email, args.message_id, [], ['INBOX']);
+        text = `Message ${args.message_id} archived from ${email}.`;
         break;
       }
 
       case 'mark_as_read': {
-        await modifyLabels(args.email, args.message_id, [], ['UNREAD']);
+        const email = resolveAccount(args.account);
+        await modifyLabels(email, args.message_id, [], ['UNREAD']);
         text = `Message ${args.message_id} marked as read.`;
         break;
       }
 
       case 'mark_as_unread': {
-        await modifyLabels(args.email, args.message_id, ['UNREAD'], []);
+        const email = resolveAccount(args.account);
+        await modifyLabels(email, args.message_id, ['UNREAD'], []);
         text = `Message ${args.message_id} marked as unread.`;
         break;
       }

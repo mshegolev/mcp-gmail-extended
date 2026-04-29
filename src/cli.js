@@ -4,13 +4,30 @@
  *
  * Usage:
  *   node src/cli.js list
- *   node src/cli.js add   <email>
+ *   node src/cli.js add   <email> [--label <name>]
+ *   node src/cli.js label <email> <label>
  *   node src/cli.js remove <email>
  */
-import { listAccounts, removeAccount, storeTokens } from './db.js';
+import { listAccounts, removeAccount, storeTokens, setLabel, resolveEmail } from './db.js';
 import { initiateAuth } from './auth.js';
 
-const [, , command, email] = process.argv;
+const args = process.argv.slice(2);
+const command = args[0];
+
+function parseArgs(arr) {
+  const positional = [];
+  const flags = {};
+  for (let i = 0; i < arr.length; i++) {
+    if (arr[i].startsWith('--') && i + 1 < arr.length) {
+      flags[arr[i].slice(2)] = arr[++i];
+    } else {
+      positional.push(arr[i]);
+    }
+  }
+  return { positional, flags };
+}
+
+const { positional, flags } = parseArgs(args.slice(1));
 
 switch (command) {
   case 'list': {
@@ -19,53 +36,78 @@ switch (command) {
       console.log('No authenticated accounts.');
     } else {
       console.log('Authenticated Gmail accounts:');
-      accounts.forEach(a => console.log(`  • ${a}`));
+      accounts.forEach(({ email, label }) => {
+        const tag = label ? ` [${label}]` : '';
+        console.log(`  • ${email}${tag}`);
+      });
     }
     break;
   }
 
   case 'add': {
+    const email = positional[0];
+    const label = flags.label ?? null;
     if (!email) {
-      console.error('Usage: gmail-mcp-cli add <email>');
+      console.error('Usage: gmail-mcp-cli add <email> [--label <name>]');
       process.exit(1);
     }
-
     console.log(`Starting authentication for ${email}...`);
     const session = await initiateAuth();
-
     console.log('\nOpen this URL in your browser to authenticate:\n');
     console.log(session.authUrl);
     console.log('\nWaiting for you to complete sign-in...');
-
-    // Try to open the browser automatically (non-fatal if it fails)
     try {
       const { default: open } = await import('open');
       await open(session.authUrl);
     } catch {
-      // open is optional; user can paste the URL manually
+      // open is optional
     }
-
     const tokens = await session.tokenPromise;
-    storeTokens(email, tokens);
-    console.log(`\nSuccessfully authenticated ${email}!`);
+    storeTokens(email, tokens, label);
+    const labelMsg = label ? ` with label "${label}"` : '';
+    console.log(`\nSuccessfully authenticated ${email}${labelMsg}!`);
+    break;
+  }
+
+  case 'label': {
+    const email = positional[0];
+    const label = positional[1];
+    if (!email || !label) {
+      console.error('Usage: gmail-mcp-cli label <email> <label>');
+      process.exit(1);
+    }
+    const resolved = resolveEmail(email);
+    if (!resolved) {
+      console.error(`Account not found: ${email}`);
+      process.exit(1);
+    }
+    setLabel(resolved, label);
+    console.log(`Label "${label}" set for ${resolved}`);
     break;
   }
 
   case 'remove': {
+    const email = positional[0];
     if (!email) {
       console.error('Usage: gmail-mcp-cli remove <email>');
       process.exit(1);
     }
-    removeAccount(email);
-    console.log(`Removed account: ${email}`);
+    const resolved = resolveEmail(email);
+    if (!resolved) {
+      console.error(`Account not found: ${email}`);
+      process.exit(1);
+    }
+    removeAccount(resolved);
+    console.log(`Removed account: ${resolved}`);
     break;
   }
 
   default: {
     console.log(`Usage:
-  node src/cli.js list              List authenticated accounts
-  node src/cli.js add <email>       Authenticate a Gmail account
-  node src/cli.js remove <email>    Remove a Gmail account`);
+  gmail-mcp-cli list                        List authenticated accounts
+  gmail-mcp-cli add <email> [--label name]  Authenticate a Gmail account
+  gmail-mcp-cli label <email> <label>       Set or update a label for an account
+  gmail-mcp-cli remove <email|label>        Remove a Gmail account`);
     if (command) process.exit(1);
   }
 }
