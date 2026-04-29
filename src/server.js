@@ -7,7 +7,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 
 import { listAccounts, storeTokens, removeAccount, setLabel, resolveEmail } from './db.js';
-import { initiateAuth } from './auth.js';
+import { initiateAuth, checkAuthStatus } from './auth.js';
 import {
   searchEmails,
   getEmail,
@@ -108,6 +108,22 @@ const TOOLS = [
         email: { type: 'string', description: 'Gmail address being authenticated' },
       },
       required: ['email'],
+    },
+  },
+  {
+    name: 'check_auth_status',
+    description:
+      'Check whether the OAuth token for one or all accounts is valid. ' +
+      'Call this proactively before send operations in long conversations to avoid mid-flight auth failures.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        account: {
+          type: 'string',
+          description:
+            'Email address or label to check. Omit to check all authenticated accounts.',
+        },
+      },
     },
   },
   {
@@ -390,6 +406,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         pendingSessions.delete(email);
         text = `Successfully authenticated ${email}!` +
           (session.label ? ` Label: "${session.label}"` : '');
+        break;
+      }
+
+      case 'check_auth_status': {
+        const targets = args.account
+          ? [resolveAccount(args.account)]
+          : listAccounts().map(a => a.email);
+
+        const results = await Promise.all(targets.map(e => checkAuthStatus(e)));
+        text = results
+          .map(r =>
+            r.valid
+              ? `✓ ${r.email} — token valid`
+              : `✗ ${r.email} — ${r.error}`
+          )
+          .join('\n');
         break;
       }
 

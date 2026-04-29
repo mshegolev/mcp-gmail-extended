@@ -15,6 +15,33 @@ const SCOPES = [
   'https://www.googleapis.com/auth/gmail.labels',
 ];
 
+// Thrown when a token refresh fails due to revocation or expiry
+export class TokenRefreshError extends Error {
+  constructor(email) {
+    super(
+      `Token for "${email}" is invalid or has been revoked. ` +
+        `Re-authenticate by running: gmail-mcp-cli add ${email}`
+    );
+    this.name = 'TokenRefreshError';
+    this.email = email;
+  }
+}
+
+// Call this in catch blocks inside gmail-client.js to surface token errors cleanly
+export function wrapTokenError(email, err) {
+  const msg = (err.message ?? '').toLowerCase();
+  const isTokenError =
+    err.status === 401 ||
+    err.code === 401 ||
+    msg.includes('invalid_grant') ||
+    msg.includes('token has been expired') ||
+    msg.includes('token has been revoked') ||
+    msg.includes('invalid credentials');
+
+  if (isTokenError) throw new TokenRefreshError(email);
+  throw err;
+}
+
 function getClientCredentials() {
   if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
     return {
@@ -61,13 +88,38 @@ export async function getAuthenticatedClient(email) {
   return oauth2Client;
 }
 
-/**
- * Start the OAuth2 flow. Returns an auth URL for the user to open and a promise
- * that resolves with the tokens once the browser callback arrives.
- *
- * The local HTTP server is started immediately so it can capture the redirect
- * even if complete_auth is called after the browser finishes.
- */
+// Lightweight token health check — calls users.getProfile which is minimal overhead
+export async function checkAuthStatus(email) {
+  try {
+    const auth = await getAuthenticatedClient(email);
+    const gmail = google.gmail({ version: 'v1', auth });
+    const { data } = await gmail.users.getProfile({ userId: 'me' });
+    return {
+      email,
+      valid: true,
+      messagesTotal: data.messagesTotal,
+    };
+  } catch (err) {
+    const msg = (err.message ?? '').toLowerCase();
+    const isTokenError =
+      err.status === 401 ||
+      err.code === 401 ||
+      msg.includes('invalid_grant') ||
+      msg.includes('token has been expired') ||
+      msg.includes('token has been revoked') ||
+      msg.includes('invalid credentials');
+
+    return {
+      email,
+      valid: false,
+      needsReauth: isTokenError,
+      error: isTokenError
+        ? `Token expired or revoked. Run: gmail-mcp-cli add ${email}`
+        : err.message,
+    };
+  }
+}
+
 export function initiateAuth() {
   const { clientId, clientSecret } = getClientCredentials();
 
