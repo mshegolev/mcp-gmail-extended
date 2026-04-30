@@ -1,6 +1,6 @@
 {
   "name": "multi-gmail-mcp",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "MCP server for managing multiple Gmail accounts in Claude Desktop",
   "mcpName": "io.github.gx-55/multi-gmail-mcp",
   "type": "module",
