@@ -26,7 +26,7 @@ let activeAccount = null;
 
 
 const server = new Server(
-  { name: 'multi-gmail-mcp', version: '1.0.1' },
+  { name: 'multi-gmail-mcp', version: '1.0.5' },
   { capabilities: { tools: {} } }
 );
 

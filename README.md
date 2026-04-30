@@ -100,7 +100,7 @@ If you prefer environment variables over `~/.gmail-mcp-oauth.json`:
 }
 ```
 
-Restart Claude Desktop after saving. Click the hammer icon to confirm 15 tools are loaded.
+Restart Claude Desktop after saving. Click the hammer icon to confirm 19 tools are loaded.
 
 ---
 
@@ -205,7 +205,7 @@ multi-gmail-mcp/
 │   ├── gmail-mcp.js        # Entry point for the MCP server command
 │   └── gmail-mcp-cli.js    # Entry point for the CLI command
 ├── src/
-│   ├── server.js           # MCP server — all 15 tools
+│   ├── server.js           # MCP server — all 19 tools
 │   ├── gmail-client.js     # Gmail API wrapper
 │   ├── auth.js             # OAuth2 flow with auto-refresh
 │   ├── db.js               # SQLite token storage (node:sqlite)
