@@ -2,6 +2,8 @@
 
 A [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that lets **Claude Desktop manage multiple Gmail accounts** simultaneously. Listed on the official Anthropic MCP registry and published on npm.
 
+![demo](multi-gmail-demo.gif)
+
 ---
 
 ## Features
