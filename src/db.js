@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { homedir } from 'os';
 import { join } from 'path';
 
-const DB_PATH = join(homedir(), '.gmail-mcp-tokens.db');
+const DB_PATH = process.env.GMAIL_MCP_DB_PATH ?? join(homedir(), '.gmail-mcp-tokens.db');
 
 let db;
 

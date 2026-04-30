@@ -179,6 +179,8 @@ Check both my accounts for emails from GitHub and summarize them.
 - The server runs over **stdio only** — no network port is opened
 - OAuth scopes are limited to the minimum required
 
+See [SECURITY.md](SECURITY.md) for full details: token storage, network behavior, scope rationale, revocation steps, and how to report a vulnerability.
+
 ---
 
 ## Registry

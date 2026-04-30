@@ -7,6 +7,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 
 import { listAccounts, storeTokens, removeAccount, setLabel, resolveEmail } from './db.js';
+import { resolveAccount } from './account-resolver.js';
 import { initiateAuth, checkAuthStatus } from './auth.js';
 import {
   searchEmails,
@@ -23,27 +24,6 @@ const pendingSessions = new Map();
 // Session-level active account (label or email)
 let activeAccount = null;
 
-/**
- * Resolve a label, email, or fallback to the active account.
- * Throws a descriptive error if nothing resolves.
- */
-function resolveAccount(labelOrEmail) {
-  const target = labelOrEmail || activeAccount;
-  if (!target) {
-    throw new Error(
-      'No account specified and no active account set. ' +
-        'Pass an email/label or call set_active_account first.'
-    );
-  }
-  const email = resolveEmail(target);
-  if (!email) {
-    throw new Error(
-      `No account found for "${target}". ` +
-        'Use list_accounts to see available accounts and their labels.'
-    );
-  }
-  return email;
-}
 
 const server = new Server(
   { name: 'multi-gmail-mcp', version: '1.0.1' },
@@ -361,7 +341,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'set_active_account': {
-        const email = resolveAccount(args.account);
+        const email = resolveAccount(args.account, activeAccount);
         activeAccount = args.account;
         text = `Active account set to: ${email}${args.account !== email ? ` (label: "${args.account}")` : ''}`;
         break;
@@ -413,7 +393,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'check_auth_status': {
         const targets = args.account
-          ? [resolveAccount(args.account)]
+          ? [resolveAccount(args.account, activeAccount)]
           : listAccounts().map(a => a.email);
 
         const results = await Promise.all(targets.map(e => checkAuthStatus(e)));
@@ -428,14 +408,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'set_account_label': {
-        const email = resolveAccount(args.account);
+        const email = resolveAccount(args.account, activeAccount);
         setLabel(email, args.label);
         text = `Label "${args.label}" set for ${email}`;
         break;
       }
 
       case 'remove_account': {
-        const email = resolveAccount(args.account);
+        const email = resolveAccount(args.account, activeAccount);
         removeAccount(email);
         if (activeAccount === args.account || activeAccount === email) activeAccount = null;
         text = `Removed account: ${email}`;
@@ -443,7 +423,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'search_emails': {
-        const email = resolveAccount(args.account);
+        const email = resolveAccount(args.account, activeAccount);
         const results = await searchEmails(email, args.query, args.max_results);
         if (!results.length) {
           text = `No emails found in ${email} matching your query.`;
@@ -465,7 +445,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'get_email': {
-        const email = resolveAccount(args.account);
+        const email = resolveAccount(args.account, activeAccount);
         const msg = await getEmail(email, args.message_id);
         text = [
           `From: ${msg.from}`,
@@ -483,7 +463,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'send_email': {
-        const email = resolveAccount(args.account);
+        const email = resolveAccount(args.account, activeAccount);
         const sent = await sendEmail(email, {
           to: args.to,
           subject: args.subject,
@@ -496,14 +476,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'reply_to_email': {
-        const email = resolveAccount(args.account);
+        const email = resolveAccount(args.account, activeAccount);
         const replied = await replyToEmail(email, args.message_id, args.body);
         text = `Reply sent from ${email}. Message ID: ${replied.id}`;
         break;
       }
 
       case 'create_draft': {
-        const email = resolveAccount(args.account);
+        const email = resolveAccount(args.account, activeAccount);
         const draft = await createDraft(email, {
           to: args.to,
           subject: args.subject,
@@ -516,42 +496,42 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'list_labels': {
-        const email = resolveAccount(args.account);
+        const email = resolveAccount(args.account, activeAccount);
         const labels = await listLabels(email);
         text = labels.map(l => `${l.name}  (ID: ${l.id})`).join('\n');
         break;
       }
 
       case 'add_label': {
-        const email = resolveAccount(args.account);
+        const email = resolveAccount(args.account, activeAccount);
         await modifyLabels(email, args.message_id, args.label_ids, []);
         text = `Labels added to message ${args.message_id}.`;
         break;
       }
 
       case 'remove_label': {
-        const email = resolveAccount(args.account);
+        const email = resolveAccount(args.account, activeAccount);
         await modifyLabels(email, args.message_id, [], args.label_ids);
         text = `Labels removed from message ${args.message_id}.`;
         break;
       }
 
       case 'archive_email': {
-        const email = resolveAccount(args.account);
+        const email = resolveAccount(args.account, activeAccount);
         await modifyLabels(email, args.message_id, [], ['INBOX']);
         text = `Message ${args.message_id} archived from ${email}.`;
         break;
       }
 
       case 'mark_as_read': {
-        const email = resolveAccount(args.account);
+        const email = resolveAccount(args.account, activeAccount);
         await modifyLabels(email, args.message_id, [], ['UNREAD']);
         text = `Message ${args.message_id} marked as read.`;
         break;
       }
 
       case 'mark_as_unread': {
-        const email = resolveAccount(args.account);
+        const email = resolveAccount(args.account, activeAccount);
         await modifyLabels(email, args.message_id, ['UNREAD'], []);
         text = `Message ${args.message_id} marked as unread.`;
         break;

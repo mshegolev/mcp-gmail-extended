@@ -10,7 +10,8 @@
   },
   "scripts": {
     "start": "node src/server.js",
-    "cli": "node src/cli.js"
+    "cli": "node src/cli.js",
+    "test": "node --test test/gmail-client.test.js test/db.test.js test/account-resolver.test.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

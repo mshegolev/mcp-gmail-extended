@@ -15,11 +15,11 @@ async function run(email, fn) {
   }
 }
 
-function getHeader(headers, name) {
+export function getHeader(headers, name) {
   return headers?.find(h => h.name.toLowerCase() === name.toLowerCase())?.value ?? '';
 }
 
-function extractBody(payload) {
+export function extractBody(payload) {
   if (!payload) return '';
 
   if (payload.parts) {
@@ -46,7 +46,7 @@ function extractBody(payload) {
   return '';
 }
 
-function buildRaw({ from, to, cc, bcc, subject, body, inReplyTo, references }) {
+export function buildRaw({ from, to, cc, bcc, subject, body, inReplyTo, references }) {
   const lines = [
     `From: ${from}`,
     `To: ${to}`,
