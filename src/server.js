@@ -55,6 +55,8 @@ const TOOLS = [
     name: 'list_accounts',
     description:
       'List all authenticated Gmail accounts with their labels. ' +
+      'Labels are the authoritative account identifiers — always use the label to determine ' +
+      'which account is work, personal, etc. Never infer account purpose from the email domain. ' +
       'Always call this first so you know which label maps to which address.',
     inputSchema: { type: 'object', properties: {} },
   },
@@ -347,11 +349,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         const active = activeAccount ? `\nActive account: ${activeAccount}` : '';
         text =
-          'Authenticated Gmail accounts:\n' +
+          'Account map (labels are authoritative — do not infer purpose from email domains):\n' +
           accounts
             .map(({ email, label }) => {
-              const tag = label ? ` [label: ${label}]` : '';
-              return `  • ${email}${tag}`;
+              const labelPart = label ? `[${label}]` : '[no label]';
+              return `  ${labelPart.padEnd(20)} → ${email}`;
             })
             .join('\n') +
           active;
