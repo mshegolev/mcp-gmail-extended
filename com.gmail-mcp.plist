@@ -7,7 +7,8 @@
 
   <key>ProgramArguments</key>
   <array>
-    <!-- Full path to the gmail-mcp binary — run `which gmail-mcp` to confirm -->
+    <!-- Full paths required — launchd does not inherit nvm PATH -->
+    <string>/Users/rogersxie/.nvm/versions/node/v24.14.0/bin/node</string>
     <string>/Users/rogersxie/.nvm/versions/node/v24.14.0/bin/gmail-mcp</string>
     <string>--http</string>
   </array>
