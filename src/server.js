@@ -1,6 +1,4 @@
-#!/usr/bin/env node
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -18,17 +16,6 @@ import {
   listLabels,
   modifyLabels,
 } from './gmail-client.js';
-
-const pendingSessions = new Map();
-
-// Session-level active account (label or email)
-let activeAccount = null;
-
-
-const server = new Server(
-  { name: 'multi-gmail-mcp', version: '1.0.5' },
-  { capabilities: { tools: {} } }
-);
 
 const TOOLS = [
   {
@@ -312,244 +299,254 @@ const TOOLS = [
   },
 ];
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
+// Returns a fully configured MCP Server instance with isolated session state.
+// Call once per stdio session, or once per HTTP client session.
+export function createServer() {
+  const pendingSessions = new Map();
+  let activeAccount = null;
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
+  const server = new Server(
+    { name: 'multi-gmail-mcp', version: '1.0.6' },
+    { capabilities: { tools: {} } }
+  );
 
-  try {
-    let text;
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
 
-    switch (name) {
-      case 'list_accounts': {
-        const accounts = listAccounts();
-        if (!accounts.length) {
-          text = 'No Gmail accounts authenticated yet. Use initiate_auth to add one.';
-          break;
-        }
-        const active = activeAccount ? `\nActive account: ${activeAccount}` : '';
-        text =
-          'Account map (labels are authoritative — do not infer purpose from email domains):\n' +
-          accounts
-            .map(({ email, label }) => {
-              const labelPart = label ? `[${label}]` : '[no label]';
-              return `  ${labelPart.padEnd(20)} → ${email}`;
-            })
-            .join('\n') +
-          active;
-        break;
-      }
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const { name, arguments: args } = request.params;
 
-      case 'set_active_account': {
-        const email = resolveAccount(args.account, activeAccount);
-        activeAccount = args.account;
-        text = `Active account set to: ${email}${args.account !== email ? ` (label: "${args.account}")` : ''}`;
-        break;
-      }
+    try {
+      let text;
 
-      case 'get_active_account': {
-        if (!activeAccount) {
-          text = 'No active account set. Use set_active_account to set one.';
-        } else {
-          const email = resolveEmail(activeAccount);
-          text = `Active account: ${email}${activeAccount !== email ? ` (label: "${activeAccount}")` : ''}`;
-        }
-        break;
-      }
-
-      case 'initiate_auth': {
-        const { email, label } = args;
-        if (pendingSessions.has(email)) {
-          const existing = pendingSessions.get(email);
+      switch (name) {
+        case 'list_accounts': {
+          const accounts = listAccounts();
+          if (!accounts.length) {
+            text = 'No Gmail accounts authenticated yet. Use initiate_auth to add one.';
+            break;
+          }
+          const active = activeAccount ? `\nActive account: ${activeAccount}` : '';
           text =
-            `Authentication already in progress for ${email}.\n\n` +
-            `Open this URL if you haven't already:\n${existing.authUrl}\n\n` +
-            `Then call complete_auth with email: ${email}`;
+            'Account map (labels are authoritative — do not infer purpose from email domains):\n' +
+            accounts
+              .map(({ email, label }) => {
+                const labelPart = label ? `[${label}]` : '[no label]';
+                return `  ${labelPart.padEnd(20)} → ${email}`;
+              })
+              .join('\n') +
+            active;
           break;
         }
-        const session = await initiateAuth();
-        pendingSessions.set(email, { ...session, label });
-        text =
-          `Authentication started for ${email}.\n\n` +
-          `Please open this URL in your browser:\n${session.authUrl}\n\n` +
-          `After completing sign-in, call complete_auth with email: ${email}`;
-        break;
-      }
 
-      case 'complete_auth': {
-        const { email } = args;
-        const session = pendingSessions.get(email);
-        if (!session) {
-          text = `No pending authentication for ${email}. Call initiate_auth first.`;
+        case 'set_active_account': {
+          const email = resolveAccount(args.account, activeAccount);
+          activeAccount = args.account;
+          text = `Active account set to: ${email}${args.account !== email ? ` (label: "${args.account}")` : ''}`;
           break;
         }
-        const tokens = await session.tokenPromise;
-        storeTokens(email, tokens, session.label ?? null);
-        pendingSessions.delete(email);
-        text = `Successfully authenticated ${email}!` +
-          (session.label ? ` Label: "${session.label}"` : '');
-        break;
-      }
 
-      case 'check_auth_status': {
-        const targets = args.account
-          ? [resolveAccount(args.account, activeAccount)]
-          : listAccounts().map(a => a.email);
-
-        const results = await Promise.all(targets.map(e => checkAuthStatus(e)));
-        text = results
-          .map(r =>
-            r.valid
-              ? `✓ ${r.email} — token valid`
-              : `✗ ${r.email} — ${r.error}`
-          )
-          .join('\n');
-        break;
-      }
-
-      case 'set_account_label': {
-        const email = resolveAccount(args.account, activeAccount);
-        setLabel(email, args.label);
-        text = `Label "${args.label}" set for ${email}`;
-        break;
-      }
-
-      case 'remove_account': {
-        const email = resolveAccount(args.account, activeAccount);
-        removeAccount(email);
-        if (activeAccount === args.account || activeAccount === email) activeAccount = null;
-        text = `Removed account: ${email}`;
-        break;
-      }
-
-      case 'search_emails': {
-        const email = resolveAccount(args.account, activeAccount);
-        const results = await searchEmails(email, args.query, args.max_results);
-        if (!results.length) {
-          text = `No emails found in ${email} matching your query.`;
+        case 'get_active_account': {
+          if (!activeAccount) {
+            text = 'No active account set. Use set_active_account to set one.';
+          } else {
+            const email = resolveEmail(activeAccount);
+            text = `Active account: ${email}${activeAccount !== email ? ` (label: "${activeAccount}")` : ''}`;
+          }
           break;
         }
-        text = results
-          .map(m =>
-            [
-              `ID: ${m.id}`,
-              `From: ${m.from}`,
-              `Subject: ${m.subject}`,
-              `Date: ${m.date}`,
-              `Snippet: ${m.snippet}`,
-              `Labels: ${m.labels.join(', ')}`,
-            ].join('\n')
-          )
-          .join('\n\n---\n\n');
-        break;
+
+        case 'initiate_auth': {
+          const { email, label } = args;
+          if (pendingSessions.has(email)) {
+            const existing = pendingSessions.get(email);
+            text =
+              `Authentication already in progress for ${email}.\n\n` +
+              `Open this URL if you haven't already:\n${existing.authUrl}\n\n` +
+              `Then call complete_auth with email: ${email}`;
+            break;
+          }
+          const session = await initiateAuth();
+          pendingSessions.set(email, { ...session, label });
+          text =
+            `Authentication started for ${email}.\n\n` +
+            `Please open this URL in your browser:\n${session.authUrl}\n\n` +
+            `After completing sign-in, call complete_auth with email: ${email}`;
+          break;
+        }
+
+        case 'complete_auth': {
+          const { email } = args;
+          const session = pendingSessions.get(email);
+          if (!session) {
+            text = `No pending authentication for ${email}. Call initiate_auth first.`;
+            break;
+          }
+          const tokens = await session.tokenPromise;
+          storeTokens(email, tokens, session.label ?? null);
+          pendingSessions.delete(email);
+          text = `Successfully authenticated ${email}!` +
+            (session.label ? ` Label: "${session.label}"` : '');
+          break;
+        }
+
+        case 'check_auth_status': {
+          const targets = args.account
+            ? [resolveAccount(args.account, activeAccount)]
+            : listAccounts().map(a => a.email);
+
+          const results = await Promise.all(targets.map(e => checkAuthStatus(e)));
+          text = results
+            .map(r =>
+              r.valid
+                ? `✓ ${r.email} — token valid`
+                : `✗ ${r.email} — ${r.error}`
+            )
+            .join('\n');
+          break;
+        }
+
+        case 'set_account_label': {
+          const email = resolveAccount(args.account, activeAccount);
+          setLabel(email, args.label);
+          text = `Label "${args.label}" set for ${email}`;
+          break;
+        }
+
+        case 'remove_account': {
+          const email = resolveAccount(args.account, activeAccount);
+          removeAccount(email);
+          if (activeAccount === args.account || activeAccount === email) activeAccount = null;
+          text = `Removed account: ${email}`;
+          break;
+        }
+
+        case 'search_emails': {
+          const email = resolveAccount(args.account, activeAccount);
+          const results = await searchEmails(email, args.query, args.max_results);
+          if (!results.length) {
+            text = `No emails found in ${email} matching your query.`;
+            break;
+          }
+          text = results
+            .map(m =>
+              [
+                `ID: ${m.id}`,
+                `From: ${m.from}`,
+                `Subject: ${m.subject}`,
+                `Date: ${m.date}`,
+                `Snippet: ${m.snippet}`,
+                `Labels: ${m.labels.join(', ')}`,
+              ].join('\n')
+            )
+            .join('\n\n---\n\n');
+          break;
+        }
+
+        case 'get_email': {
+          const email = resolveAccount(args.account, activeAccount);
+          const msg = await getEmail(email, args.message_id);
+          text = [
+            `From: ${msg.from}`,
+            `To: ${msg.to}`,
+            msg.cc ? `Cc: ${msg.cc}` : null,
+            `Subject: ${msg.subject}`,
+            `Date: ${msg.date}`,
+            `Labels: ${msg.labels.join(', ')}`,
+            '',
+            msg.body,
+          ]
+            .filter(l => l !== null)
+            .join('\n');
+          break;
+        }
+
+        case 'send_email': {
+          const email = resolveAccount(args.account, activeAccount);
+          const sent = await sendEmail(email, {
+            to: args.to,
+            subject: args.subject,
+            body: args.body,
+            cc: args.cc,
+            bcc: args.bcc,
+          });
+          text = `Email sent from ${email}. Message ID: ${sent.id}`;
+          break;
+        }
+
+        case 'reply_to_email': {
+          const email = resolveAccount(args.account, activeAccount);
+          const replied = await replyToEmail(email, args.message_id, args.body);
+          text = `Reply sent from ${email}. Message ID: ${replied.id}`;
+          break;
+        }
+
+        case 'create_draft': {
+          const email = resolveAccount(args.account, activeAccount);
+          const draft = await createDraft(email, {
+            to: args.to,
+            subject: args.subject,
+            body: args.body,
+            cc: args.cc,
+            bcc: args.bcc,
+          });
+          text = `Draft created in ${email}. Draft ID: ${draft.id}`;
+          break;
+        }
+
+        case 'list_labels': {
+          const email = resolveAccount(args.account, activeAccount);
+          const labels = await listLabels(email);
+          text = labels.map(l => `${l.name}  (ID: ${l.id})`).join('\n');
+          break;
+        }
+
+        case 'add_label': {
+          const email = resolveAccount(args.account, activeAccount);
+          await modifyLabels(email, args.message_id, args.label_ids, []);
+          text = `Labels added to message ${args.message_id}.`;
+          break;
+        }
+
+        case 'remove_label': {
+          const email = resolveAccount(args.account, activeAccount);
+          await modifyLabels(email, args.message_id, [], args.label_ids);
+          text = `Labels removed from message ${args.message_id}.`;
+          break;
+        }
+
+        case 'archive_email': {
+          const email = resolveAccount(args.account, activeAccount);
+          await modifyLabels(email, args.message_id, [], ['INBOX']);
+          text = `Message ${args.message_id} archived from ${email}.`;
+          break;
+        }
+
+        case 'mark_as_read': {
+          const email = resolveAccount(args.account, activeAccount);
+          await modifyLabels(email, args.message_id, [], ['UNREAD']);
+          text = `Message ${args.message_id} marked as read.`;
+          break;
+        }
+
+        case 'mark_as_unread': {
+          const email = resolveAccount(args.account, activeAccount);
+          await modifyLabels(email, args.message_id, ['UNREAD'], []);
+          text = `Message ${args.message_id} marked as unread.`;
+          break;
+        }
+
+        default:
+          throw new Error(`Unknown tool: ${name}`);
       }
 
-      case 'get_email': {
-        const email = resolveAccount(args.account, activeAccount);
-        const msg = await getEmail(email, args.message_id);
-        text = [
-          `From: ${msg.from}`,
-          `To: ${msg.to}`,
-          msg.cc ? `Cc: ${msg.cc}` : null,
-          `Subject: ${msg.subject}`,
-          `Date: ${msg.date}`,
-          `Labels: ${msg.labels.join(', ')}`,
-          '',
-          msg.body,
-        ]
-          .filter(l => l !== null)
-          .join('\n');
-        break;
-      }
-
-      case 'send_email': {
-        const email = resolveAccount(args.account, activeAccount);
-        const sent = await sendEmail(email, {
-          to: args.to,
-          subject: args.subject,
-          body: args.body,
-          cc: args.cc,
-          bcc: args.bcc,
-        });
-        text = `Email sent from ${email}. Message ID: ${sent.id}`;
-        break;
-      }
-
-      case 'reply_to_email': {
-        const email = resolveAccount(args.account, activeAccount);
-        const replied = await replyToEmail(email, args.message_id, args.body);
-        text = `Reply sent from ${email}. Message ID: ${replied.id}`;
-        break;
-      }
-
-      case 'create_draft': {
-        const email = resolveAccount(args.account, activeAccount);
-        const draft = await createDraft(email, {
-          to: args.to,
-          subject: args.subject,
-          body: args.body,
-          cc: args.cc,
-          bcc: args.bcc,
-        });
-        text = `Draft created in ${email}. Draft ID: ${draft.id}`;
-        break;
-      }
-
-      case 'list_labels': {
-        const email = resolveAccount(args.account, activeAccount);
-        const labels = await listLabels(email);
-        text = labels.map(l => `${l.name}  (ID: ${l.id})`).join('\n');
-        break;
-      }
-
-      case 'add_label': {
-        const email = resolveAccount(args.account, activeAccount);
-        await modifyLabels(email, args.message_id, args.label_ids, []);
-        text = `Labels added to message ${args.message_id}.`;
-        break;
-      }
-
-      case 'remove_label': {
-        const email = resolveAccount(args.account, activeAccount);
-        await modifyLabels(email, args.message_id, [], args.label_ids);
-        text = `Labels removed from message ${args.message_id}.`;
-        break;
-      }
-
-      case 'archive_email': {
-        const email = resolveAccount(args.account, activeAccount);
-        await modifyLabels(email, args.message_id, [], ['INBOX']);
-        text = `Message ${args.message_id} archived from ${email}.`;
-        break;
-      }
-
-      case 'mark_as_read': {
-        const email = resolveAccount(args.account, activeAccount);
-        await modifyLabels(email, args.message_id, [], ['UNREAD']);
-        text = `Message ${args.message_id} marked as read.`;
-        break;
-      }
-
-      case 'mark_as_unread': {
-        const email = resolveAccount(args.account, activeAccount);
-        await modifyLabels(email, args.message_id, ['UNREAD'], []);
-        text = `Message ${args.message_id} marked as unread.`;
-        break;
-      }
-
-      default:
-        throw new Error(`Unknown tool: ${name}`);
+      return { content: [{ type: 'text', text }] };
+    } catch (err) {
+      return {
+        content: [{ type: 'text', text: `Error: ${err.message}` }],
+        isError: true,
+      };
     }
+  });
 
-    return { content: [{ type: 'text', text }] };
-  } catch (err) {
-    return {
-      content: [{ type: 'text', text: `Error: ${err.message}` }],
-      isError: true,
-    };
-  }
-});
-
-const transport = new StdioServerTransport();
-await server.connect(transport);
-console.error('multi-gmail-mcp server started');
+  return server;
+}

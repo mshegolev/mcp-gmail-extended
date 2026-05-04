@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.gmail-mcp</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <!-- Full path to the gmail-mcp binary — run `which gmail-mcp` to confirm -->
+    <string>/Users/rogersxie/.nvm/versions/node/v24.14.0/bin/gmail-mcp</string>
+    <string>--http</string>
+  </array>
+
+  <!-- Optional: override the default port (3765) -->
+  <!-- <key>EnvironmentVariables</key>
+  <dict>
+    <key>GMAIL_MCP_HTTP_PORT</key>
+    <string>3765</string>
+  </dict> -->
+
+  <!-- Restart automatically if it crashes -->
+  <key>KeepAlive</key>
+  <true/>
+
+  <!-- Start on login -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/gmail-mcp.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/tmp/gmail-mcp.log</string>
+</dict>
+</plist>
