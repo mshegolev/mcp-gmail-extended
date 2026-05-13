@@ -15,6 +15,9 @@ import {
   createDraft,
   listLabels,
   modifyLabels,
+  listAttachments,
+  getAttachment,
+  getMessageWithAttachments,
 } from './gmail-client.js';
 
 const TOOLS = [
@@ -297,6 +300,52 @@ const TOOLS = [
       required: ['message_id'],
     },
   },
+  {
+    name: 'list_attachments',
+    description: 'List all attachments in an email. Returns metadata about each attachment (filename, MIME type, size).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        account: {
+          type: 'string',
+          description: 'Email address or label. Uses active account if omitted.',
+        },
+        message_id: { type: 'string', description: 'Email message ID' },
+      },
+      required: ['message_id'],
+    },
+  },
+  {
+    name: 'get_attachment',
+    description: 'Download a specific attachment from an email. Returns the file content as base64-encoded data.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        account: {
+          type: 'string',
+          description: 'Email address or label. Uses active account if omitted.',
+        },
+        message_id: { type: 'string', description: 'Email message ID' },
+        attachment_id: { type: 'string', description: 'Attachment ID (from list_attachments)' },
+      },
+      required: ['message_id', 'attachment_id'],
+    },
+  },
+  {
+    name: 'get_message_with_attachments',
+    description: 'Get email details including a list of attachments. Similar to get_email but also includes attachment metadata.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        account: {
+          type: 'string',
+          description: 'Email address or label. Uses active account if omitted.',
+        },
+        message_id: { type: 'string', description: 'Email message ID' },
+      },
+      required: ['message_id'],
+    },
+  },
 ];
 
 // Returns a fully configured MCP Server instance with isolated session state.
@@ -532,6 +581,66 @@ export function createServer() {
           const email = resolveAccount(args.account, activeAccount);
           await modifyLabels(email, args.message_id, ['UNREAD'], []);
           text = `Message ${args.message_id} marked as unread.`;
+          break;
+        }
+
+        case 'list_attachments': {
+          const email = resolveAccount(args.account, activeAccount);
+          const attachments = await listAttachments(email, args.message_id);
+          if (attachments.length === 0) {
+            text = 'No attachments found in this email.';
+          } else {
+            text = attachments
+              .map(
+                a =>
+                  `${a.filename} (${a.mimeType}) - ${a.size} bytes - ID: ${a.id}`
+              )
+              .join('\n');
+          }
+          break;
+        }
+
+        case 'get_attachment': {
+          const email = resolveAccount(args.account, activeAccount);
+          const attachment = await getAttachment(
+            email,
+            args.message_id,
+            args.attachment_id
+          );
+          text = JSON.stringify(
+            {
+              id: attachment.id,
+              size: attachment.size,
+              data: attachment.data,
+            },
+            null,
+            2
+          );
+          break;
+        }
+
+        case 'get_message_with_attachments': {
+          const email = resolveAccount(args.account, activeAccount);
+          const msg = await getMessageWithAttachments(email, args.message_id);
+          const attachmentList =
+            msg.attachments.length > 0
+              ? msg.attachments
+                  .map(a => `  - ${a.filename} (${a.mimeType})`)
+                  .join('\n')
+              : '  (none)';
+          text = [
+            `From: ${msg.from}`,
+            `To: ${msg.to}`,
+            msg.cc ? `Cc: ${msg.cc}` : null,
+            `Subject: ${msg.subject}`,
+            `Date: ${msg.date}`,
+            `Attachments:\n${attachmentList}`,
+            `Labels: ${msg.labels.join(', ')}`,
+            '',
+            msg.body,
+          ]
+            .filter(l => l !== null)
+            .join('\n');
           break;
         }
 

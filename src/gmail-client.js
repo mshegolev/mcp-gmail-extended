@@ -181,3 +181,85 @@ export async function modifyLabels(email, messageId, addLabelIds = [], removeLab
     return data;
   });
 }
+
+// Extract attachment info from message payload
+function extractAttachments(payload, messageId) {
+  const attachments = [];
+
+  function processPayload(part) {
+    if (!part) return;
+
+    if (part.filename && part.mimeType !== 'application/octet-stream' || part.filename) {
+      attachments.push({
+        id: part.body?.attachmentId,
+        filename: part.filename,
+        mimeType: part.mimeType,
+        size: part.body?.size ?? 0,
+        partId: part.partId,
+      });
+    }
+
+    if (part.parts) {
+      part.parts.forEach(subPart => processPayload(subPart));
+    }
+  }
+
+  if (payload) {
+    processPayload(payload);
+  }
+
+  return attachments;
+}
+
+export async function listAttachments(email, messageId) {
+  const { gmail } = await getGmail(email);
+  return run(email, async () => {
+    const { data: msg } = await gmail.users.messages.get({
+      userId: 'me',
+      id: messageId,
+      format: 'full',
+    });
+    return extractAttachments(msg.payload, messageId);
+  });
+}
+
+export async function getAttachment(email, messageId, attachmentId) {
+  const { gmail } = await getGmail(email);
+  return run(email, async () => {
+    const { data } = await gmail.users.messages.attachments.get({
+      userId: 'me',
+      messageId,
+      id: attachmentId,
+    });
+    return {
+      id: data.id,
+      data: data.data, // base64-encoded content
+      size: data.size,
+    };
+  });
+}
+
+export async function getMessageWithAttachments(email, messageId) {
+  const { gmail } = await getGmail(email);
+  return run(email, async () => {
+    const { data: msg } = await gmail.users.messages.get({
+      userId: 'me',
+      id: messageId,
+      format: 'full',
+    });
+    return {
+      id: msg.id,
+      threadId: msg.threadId,
+      from: getHeader(msg.payload?.headers, 'From'),
+      to: getHeader(msg.payload?.headers, 'To'),
+      cc: getHeader(msg.payload?.headers, 'Cc'),
+      subject: getHeader(msg.payload?.headers, 'Subject'),
+      date: getHeader(msg.payload?.headers, 'Date'),
+      messageId: getHeader(msg.payload?.headers, 'Message-ID'),
+      references: getHeader(msg.payload?.headers, 'References'),
+      body: extractBody(msg.payload),
+      attachments: extractAttachments(msg.payload, messageId),
+      labels: msg.labelIds ?? [],
+    };
+  });
+}
